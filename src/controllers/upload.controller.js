@@ -1,6 +1,7 @@
 const logger = require('../utils/logger');
 const ffmpegService = require('../services/ffmpeg.service');
 const transcriptionService = require('../services/transcription.service');
+const extractionService = require('../services/extraction.service');
 const cleanup = require('../utils/cleanup');
 
 /**
@@ -34,10 +35,15 @@ const handleUpload = async (req, res, next) => {
     const excerpt = transcriptionResult.transcript.substring(0, 200);
     logger.info(`Transcription successful! Transcript Excerpt (200 chars):\n"${excerpt}${transcriptionResult.transcript.length > 200 ? '...' : ''}"`);
 
-    // Return success response (still return success and filename for now)
+    // 4. Run Groq summary and action items extraction
+    const extractionResult = await extractionService.extract(transcriptionResult.transcript, transcriptionResult.speakers);
+    logger.info(`Extraction completed successfully:\n${JSON.stringify(extractionResult, null, 2)}`);
+
+    // Return success response with the structured data
     res.status(200).json({
       success: true,
-      filename: req.file.filename
+      filename: req.file.filename,
+      data: extractionResult
     });
   } catch (error) {
     logger.error(`Upload controller failed: ${error.message}`);
