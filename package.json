@@ -12,6 +12,7 @@
   "license": "ISC",
   "dependencies": {
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "@notionhq/client": "^2.2.15",
     "assemblyai": "^4.33.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
