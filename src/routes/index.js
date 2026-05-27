@@ -1,0 +1,13 @@
+const express = require('express');
+const router = express.Router();
+const upload = require('../middleware/upload.middleware');
+const { handleUpload } = require('../controllers/upload.controller');
+
+/**
+ * Route definitions
+ */
+
+// POST /upload: Accepts a single file in the multipart field "file"
+router.post('/upload', upload.single('file'), handleUpload);
+
+module.exports = router;
