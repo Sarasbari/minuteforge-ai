@@ -1,5 +1,4 @@
-const { Job } = require('bullmq');
-const { transcriptionQueue } = require('../queues/transcription.queue');
+const { getJob } = require('../queues/transcription.queue');
 const logger = require('../utils/logger');
 
 /**
@@ -9,8 +8,8 @@ const getJobStatus = async (req, res, next) => {
   try {
     const { id: jobId } = req.params;
     
-    // Retrieve the job from the transcription queue
-    const job = await Job.fromId(transcriptionQueue, jobId);
+    // Retrieve the job from the queue layer (handles both BullMQ and In-Memory modes)
+    const job = await getJob(jobId);
     
     if (!job) {
       const error = new Error(`Job with ID "${jobId}" was not found.`);
@@ -18,7 +17,7 @@ const getJobStatus = async (req, res, next) => {
       return next(error);
     }
     
-    // Retrieve the job's built-in state in BullMQ
+    // Retrieve the job's state
     const state = await job.getState();
     
     // Map state to v2 client-friendly status strings

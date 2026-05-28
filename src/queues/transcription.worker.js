@@ -1,5 +1,3 @@
-const { Worker } = require('bullmq');
-const { connectionOptions } = require('./transcription.queue');
 const logger = require('../utils/logger');
 const ffmpegService = require('../services/ffmpeg.service');
 const transcriptionService = require('../services/transcription.service');
@@ -8,7 +6,10 @@ const extractionService = require('../services/extraction.service');
 const notionService = require('../services/notion.service');
 const cleanup = require('../utils/cleanup');
 
-const worker = new Worker('transcription', async (job) => {
+/**
+ * Common processor logic shared between BullMQ and In-Memory queue modes.
+ */
+const workerProcessor = async (job) => {
   const { filePath, originalName, mimetype, uploadedAt } = job.data;
   let originalFilePath = filePath;
   let audioFilePath = filePath;
@@ -99,12 +100,8 @@ const worker = new Worker('transcription', async (job) => {
       await cleanup.deleteFile(audioFilePath);
     }
   }
-}, {
-  connection: connectionOptions
-});
+};
 
-worker.on('failed', (job, err) => {
-  logger.error(`Worker job "${job ? job.id : 'unknown'}" failed with error: ${err.message}`);
-});
-
-module.exports = worker;
+module.exports = {
+  workerProcessor
+};

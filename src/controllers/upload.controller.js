@@ -1,5 +1,5 @@
 const logger = require('../utils/logger');
-const { transcriptionQueue } = require('../queues/transcription.queue');
+const { addJob } = require('../queues/transcription.queue');
 
 /**
  * Controller to handle POST /upload requests
@@ -20,8 +20,8 @@ const handleUpload = async (req, res, next) => {
     // Log the file details
     logger.info(`Upload successful: filename="${req.file.filename}", mimetype="${mimetype}", size=${req.file.size} bytes`);
 
-    // Add job to BullMQ queue
-    const job = await transcriptionQueue.add('transcribe-job', {
+    // Add job to background queue (BullMQ or In-Memory)
+    const job = await addJob('transcribe-job', {
       filePath,
       originalName,
       mimetype,
