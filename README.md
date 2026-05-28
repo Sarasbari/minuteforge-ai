@@ -1,98 +1,88 @@
-# MinuteForge AI
+# 🎙️ MinuteForge AI
 
-MinuteForge AI is a lightweight, database-backed Node.js Express application that automates the processing of meeting recordings (audio or video) into formatted meeting minutes on Notion.
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+[![Awesome](https://awesome.re/badge.svg)](https://awesome.re)
 
-Version 2 introduces an asynchronous pipeline using **BullMQ** and **Upstash Redis** to support long-running files without HTTP timeouts, speaker name inference from conversational cues via **Groq**, and enhanced prompt guidelines for action item ownership and ISO deadline parsing.
+MinuteForge AI is a high-performance, asynchronous meeting intelligence engine that converts audio and video recordings into clean, structured meeting minutes, actionable items, and resolved speaker transcripts in seconds.
+
+Built with **Node.js, Express, BullMQ, and Upstash Redis**, it features speaker name resolution and metadata extraction powered by **Groq (Llama 3.3 70B)** and high-accuracy diarized transcription by **AssemblyAI**.
 
 ---
 
-## Pipeline Flow
+## 🎨 Visual Preview
 
-```mermaid
-graph TD
-    A[Client Uploads Audio/Video] --> B{File is .mp4?}
-    B -- Yes --> C[FFmpeg extracts audio track to .m4a]
-    B -- No --> D[Use raw file .mp3/.wav/.m4a]
-    C --> E[Enqueued into BullMQ]
-    D --> E
-    E --> F[Immediate HTTP 202 response to Client with jobId]
+### Interactive Dashboard View
+![Dashboard Overview](docs/images/dashboard-overview.png)
+
+### Diarized Speaker Transcript View
+![Dashboard Transcript](docs/images/dashboard-transcript.png)
+
+---
+
+## 🚀 Key Features
+
+*   **⚡ Async Processing Architecture**: Offloads CPU-intensive transcription and analysis to background workers via **BullMQ** and **Upstash Redis**. Say goodbye to HTTP request timeouts on large Zoom recordings.
+*   **🔌 Zero-Config Fallback**: If local Redis is offline and no Upstash variables are configured, the engine **automatically falls back to an in-memory queue** so developers can test immediately out of the box.
+*   **👥 Speaker Name Resolution**: Uses conversational context (greetings, introductions, direct addresses) to map generic diarization tags (`Speaker A`, `Speaker B`) to real attendee names (e.g., `Alice Chen`, `Bob Patel`).
+*   **📆 ISO Deadline Parsing**: Resolves relative deadline mentions (e.g. "by next Friday", "end of month") to actual calendar dates (e.g., `YYYY-MM-DD`) using the dynamic meeting date context.
+*   **🤝 Attributed Action Items**: Inspects surrounding context to map tasks to their respective owners. Handles ambiguity by outputting candidate splits (`Alice / Bob`) instead of defaulting to `Unassigned`.
+*   **🧬 Levenshtein Deduplication**: Merges overlapping segments on long transcript chunks and removes duplicate decisions and duplicate tasks using a Normalized Levenshtein distance string similarity metric.
+*   **💎 Premium Glassmorphic Web App**: Includes a dark-themed single page application with drag-and-drop file upload, real-time upload progress, progress timelines, checkable task grids, and one-click copy-to-clipboard markdown exporting.
+
+---
+
+## 📐 System Architecture
+
+![High-Level System Architecture](docs/images/architecture.png)
+
+---
+
+## 🛠️ Prerequisites
+
+To run this project, you will need:
+1.  **Node.js** (v18 or higher recommended)
+2.  **Redis** (optional: falls back to in-memory mode if Redis is not running locally or configured via Upstash).
+3.  **FFmpeg** (utilized for audio extraction from `.mp4` video files. Falls back to precompiled binaries automatically via `@ffmpeg-installer` if not installed globally on the system).
+
+---
+
+## ⚙️ Setup & Installation
+
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/Sarasbari/minuteforge-ai.git
+    cd minuteforge-ai
+    ```
+
+2.  **Install dependencies:**
+    ```bash
+    npm install
+    ```
+
+3.  **Configure Environment Variables:**
+    Copy the example template:
+    ```bash
+    cp .env.example .env
+    ```
+    Open `.env` and fill in your credentials:
+    ```env
+    PORT=3000
+    ASSEMBLYAI_API_KEY=your_assemblyai_api_key
+    GROQ_API_KEY=your_groq_api_key
     
-    subgraph BullMQ Worker
-        F .-> G[AssemblyAI uploads & transcribes with speaker diarization]
-        G --> H[Groq Llama 3.3 resolves speaker IDs to real names]
-        H --> I[Groq Llama 3.3 extracts JSON summary, decisions & action items]
-        I --> J[Notion service creates database item with meeting notes & transcript]
-        J --> K[Worker completes job & stores notionUrl in job result]
-    end
+    # Optional Notion Configuration (retained for backward compatibility)
+    NOTION_API_KEY=your_notion_integration_token
+    NOTION_DATABASE_ID=your_notion_database_id
     
-    L[Client polls GET /job/:id/status] --> M{Job state?}
-    M -- done --> N[Read notionUrl]
-    M -- failed --> O[Read error message]
-    M -- queued/transcribing/mapping_speakers/extracting/writing_notion --> P[Wait 5s & Poll Again]
-```
+    # Optional Upstash Redis Configuration (defaults to Local Redis / In-Memory if omitted)
+    UPSTASH_REDIS_URL=your_upstash_redis_url
+    UPSTASH_REDIS_TOKEN=your_upstash_redis_token
+    ```
 
 ---
 
-## Prerequisites
-
-To run this project, you must have:
-1. **Node.js** (v18 or higher recommended)
-2. **Redis** (either Upstash Redis credentials, or a local Redis instance on port 6379 for fallback).
-3. **FFmpeg** installed and accessible on your operating system (or the server will use the local `@ffmpeg-installer` binaries packaged with npm dependencies).
-
-### Installing FFmpeg
-
-#### **macOS**
-Use Homebrew:
-```bash
-brew install ffmpeg
-```
-
-#### **Linux (Ubuntu/Debian)**
-Use apt:
-```bash
-sudo apt update
-sudo apt install ffmpeg
-```
-
-#### **Windows**
-If you don't have FFmpeg globally installed, the project automatically falls back to utilizing precompiled binaries installed via the `@ffmpeg-installer/ffmpeg` npm dependency. If you prefer to install it globally:
-1. Download from [FFmpeg Official Site](https://ffmpeg.org/download.html).
-2. Extract the files and add the `bin/` directory path to your System Environment variables under **PATH**.
-
----
-
-## Setup & Installation
-
-1. **Clone the repository and navigate into it:**
-   ```bash
-   cd minuteforge-ai
-   ```
-
-2. **Install the dependencies:**
-   ```bash
-   npm install
-   ```
-
-3. **Configure Environment Variables:**
-   Copy the example environment file:
-   ```bash
-   cp .env.example .env
-   ```
-   Open the newly created `.env` file and populate your respective API keys:
-   ```env
-   PORT=3000
-   ASSEMBLYAI_API_KEY=your_assemblyai_api_key
-   GROQ_API_KEY=your_groq_api_key
-   NOTION_API_KEY=your_notion_integration_token
-   NOTION_DATABASE_ID=your_notion_database_id
-   UPSTASH_REDIS_URL=your_upstash_redis_url
-   UPSTASH_REDIS_TOKEN=your_upstash_redis_token
-   ```
-
----
-
-## Running the Application
+## 🏃 Running the Application
 
 ### Development Mode (with hot-reloads)
 ```bash
@@ -103,94 +93,73 @@ npm run dev
 ```bash
 npm start
 ```
-
-The server will start listening on the configured port (default `3000`) and automatically launch the BullMQ background worker thread.
+The server will start listening on port `3000`. Open your browser and navigate to **`http://localhost:3000`** to access the interface.
 
 ---
 
-## API Documentation
+## 📡 REST API Documentation
 
-### **1. GET `/health`**
-Verifies that the server is up and responsive.
-- **Response (200 OK):**
-  ```json
-  {
-    "status": "OK",
-    "uptime": 124.52
-  }
-  ```
-
-### **2. POST `/upload`**
-Accepts a single audio or video file, saves it to `/uploads`, and enqueues a background job.
-- **Request Format:** `multipart/form-data`
-- **Field Name:** `file`
-- **Allowed Formats:** `.mp3`, `.mp4`, `.m4a`, `.wav` (Max size: 500MB)
-- **Response (202 Accepted):**
-  ```json
-  {
-    "jobId": "1",
-    "status": "queued"
-  }
-  ```
-- **Error Responses:**
-  - **400 Bad Request:** Occurs if the file type is invalid, size limit exceeded, or if no file is sent.
-    ```json
-    {
-      "error": "Only .mp3, .mp4, .m4a, and .wav files are allowed"
-    }
-    ```
-
-### **3. GET `/job/:id/status`**
-Retrieves the status and result of a background job.
-- **Response (200 OK):**
-  - **In Progress:**
+### **1. POST `/upload`**
+Enqueues a background job to process the uploaded file.
+*   **Request Format:** `multipart/form-data`
+*   **Field Name:** `file`
+*   **Supported Formats:** `.mp3`, `.mp4`, `.m4a`, `.wav` (Max size: `500MB`)
+*   **Response (202 Accepted):**
     ```json
     {
       "jobId": "1",
-      "status": "transcribing", // States: 'queued', 'transcribing', 'mapping_speakers', 'extracting', 'writing_notion'
-      "progress": 30,
-      "result": null,
-      "error": null
+      "status": "queued"
     }
     ```
-  - **Completed:**
+
+### **2. GET `/job/:id/status`**
+Polls the execution status and retrieves result details.
+*   **Status States:** `queued`, `transcribing`, `mapping_speakers`, `extracting`, `done`, `failed`.
+*   **Response (200 OK - Done State):**
     ```json
     {
       "jobId": "1",
       "status": "done",
       "progress": 100,
       "result": {
-        "notionUrl": "https://www.notion.so/..."
+        "extraction": {
+          "title": "Weekly Sync",
+          "summary": "The team reviewed project updates...",
+          "attendees": ["Alice", "Bob"],
+          "keyDecisions": ["Migrated queue backend to BullMQ"],
+          "actionItems": [
+            {
+              "owner": "Alice",
+              "task": "Configure Upstash Redis dashboard",
+              "deadline": "2026-06-05"
+            }
+          ],
+          "openQuestions": []
+        },
+        "transcript": "Speaker A: Hello Bob...",
+        "speakers": [
+          { "speaker": "Alice", "text": "Hello Bob...", "start": 0, "end": 1500 }
+        ]
       },
       "error": null
     }
     ```
-  - **Failed:**
-    ```json
-    {
-      "jobId": "1",
-      "status": "failed",
-      "progress": 50,
-      "result": null,
-      "error": "AssemblyAI transcription failed: 401 Unauthorized"
-    }
-    ```
-- **Error Responses:**
-  - **404 Not Found:** If the requested `jobId` does not exist or has expired.
 
 ---
 
-## Testing locally with curl
+## 🧪 Testing Locally via CLI
 
-To send a test request and monitor it:
+You can submit files to the server using curl:
+```bash
+curl -X POST -F "file=@meeting.mp3" http://localhost:3000/upload
+```
+Using the returned `jobId`, poll the status endpoint:
+```bash
+curl http://localhost:3000/job/1/status
+```
 
-1. **Upload the file:**
-   ```bash
-   curl -X POST -F "file=@test.mp3" http://localhost:3000/upload
-   ```
-   *Expected output:* `{ "jobId": "XYZ", "status": "queued" }`
+---
 
-2. **Poll the status endpoint (replace `XYZ` with the returned jobId):**
-   ```bash
-   curl http://localhost:3000/job/XYZ/status
-   ```
+## 📝 License
+
+Distributed under the MIT License. See `LICENSE` for more information.
