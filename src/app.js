@@ -1,10 +1,14 @@
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 const routes = require('./routes');
 const errorMiddleware = require('./middleware/error.middleware');
 const logger = require('./utils/logger');
 
 const app = express();
+
+// Serve static assets from public directory
+app.use(express.static(path.join(__dirname, '../public')));
 
 // Enable Cross-Origin Resource Sharing (CORS)
 app.use(cors());

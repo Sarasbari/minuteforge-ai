@@ -3,7 +3,6 @@ const ffmpegService = require('../services/ffmpeg.service');
 const transcriptionService = require('../services/transcription.service');
 const speakerMapService = require('../services/speakerMap.service');
 const extractionService = require('../services/extraction.service');
-const notionService = require('../services/notion.service');
 const cleanup = require('../utils/cleanup');
 
 /**
@@ -19,7 +18,7 @@ const workerProcessor = async (job) => {
   try {
     // 1. Audio Extraction (if applicable)
     logger.info(`Job "${job.id}": Starting audio extraction...`);
-    await job.updateProgress(10);
+    await job.updateProgress(15);
     await job.updateData({ ...job.data, status: 'transcribing' });
     
     try {
@@ -30,7 +29,7 @@ const workerProcessor = async (job) => {
 
     // 2. Transcription via AssemblyAI
     logger.info(`Job "${job.id}": Submitting audio to AssemblyAI for transcription...`);
-    await job.updateProgress(30);
+    await job.updateProgress(45);
     
     let transcriptionResult;
     try {
@@ -41,7 +40,7 @@ const workerProcessor = async (job) => {
 
     // 3. Speaker Name Resolution
     logger.info(`Job "${job.id}": Running speaker name resolution...`);
-    await job.updateProgress(50);
+    await job.updateProgress(75);
     await job.updateData({ ...job.data, status: 'mapping_speakers' });
 
     let finalTranscript = transcriptionResult.transcript;
@@ -57,7 +56,7 @@ const workerProcessor = async (job) => {
 
     // 4. Extraction via Groq
     logger.info(`Job "${job.id}": Running AI extraction on transcript...`);
-    await job.updateProgress(70);
+    await job.updateProgress(100);
     await job.updateData({ ...job.data, status: 'extracting' });
     
     let extractionResult;
@@ -68,26 +67,14 @@ const workerProcessor = async (job) => {
       throw new Error(`Groq extraction failed: ${error.message}`);
     }
 
-    // 5. Publish to Notion
-    logger.info(`Job "${job.id}": Publishing meeting page to Notion...`);
-    await job.updateProgress(90);
-    await job.updateData({ ...job.data, status: 'writing_notion' });
+    logger.info(`Job "${job.id}" processing completed successfully.`);
     
-    let notionResult;
-    try {
-      notionResult = await notionService.createMeetingPage({
-        extraction: extractionResult,
-        transcript: finalTranscript,
-        speakers: finalSpeakers
-      });
-    } catch (error) {
-      throw new Error(`Notion publish failed: ${error.message}`);
-    }
-
-    await job.updateProgress(100);
-    logger.info(`Job "${job.id}" processing completed successfully. Notion URL: ${notionResult.url}`);
-    
-    return { notionUrl: notionResult.url };
+    // Return the extracted structured data directly to the client
+    return {
+      extraction: extractionResult,
+      transcript: finalTranscript,
+      speakers: finalSpeakers
+    };
   } catch (error) {
     logger.error(`Worker execution failed for job "${job.id}": ${error.message}`);
     throw error;

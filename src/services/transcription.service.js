@@ -29,7 +29,8 @@ async function transcribe(filePath) {
   const submission = await client.transcripts.submit({
     audio: filePath,
     speaker_labels: true,
-    speakers_expected: null
+    speakers_expected: null,
+    speech_models: ['universal-3-pro', 'universal-2']
   });
 
   const transcriptId = submission.id;
