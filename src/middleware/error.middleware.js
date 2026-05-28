@@ -17,7 +17,7 @@ function errorMiddleware(err, req, res, next) {
   if (err instanceof multer.MulterError) {
     let message = err.message;
     if (err.code === 'LIMIT_FILE_SIZE') {
-      message = 'File size limit exceeded. Maximum size allowed is 200MB.';
+      message = 'File size limit exceeded. Maximum size allowed is 500MB.';
     }
     return res.status(400).json({ error: message });
   }

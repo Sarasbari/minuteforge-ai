@@ -10,5 +10,7 @@ module.exports = {
   GROQ_API_KEY: process.env.GROQ_API_KEY,
   NOTION_API_KEY: process.env.NOTION_API_KEY,
   NOTION_DATABASE_ID: process.env.NOTION_DATABASE_ID,
-  NODE_ENV: process.env.NODE_ENV || 'development'
+  NODE_ENV: process.env.NODE_ENV || 'development',
+  UPSTASH_REDIS_URL: process.env.UPSTASH_REDIS_URL,
+  UPSTASH_REDIS_TOKEN: process.env.UPSTASH_REDIS_TOKEN
 };

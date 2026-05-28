@@ -2,6 +2,9 @@ const app = require('./src/app');
 const config = require('./src/config');
 const logger = require('./src/utils/logger');
 
+// Instantiate and start the BullMQ Worker
+require('./src/queues/transcription.worker');
+
 // Start the Express server
 const server = app.listen(config.PORT, () => {
   logger.info(`Server successfully started in ${config.NODE_ENV} mode on port ${config.PORT}`);

@@ -1,29 +1,28 @@
-const Groq = require('groq-sdk');
+const { callGroqWithRetry } = require('../utils/groqRetry');
 const config = require('../config');
 const logger = require('../utils/logger');
 
-// Initialize the Groq client
-const groq = new Groq({
-  apiKey: config.GROQ_API_KEY
-});
+const EXTRACTION_SYSTEM_PROMPT = `You are a meeting analyst. Extract structured information from the transcript below.
+The meeting took place on: {{MEETING_DATE}} (ISO 8601).
 
-// JSON Output Scheme expectation
-const EXTRACTION_SYSTEM_PROMPT = `You are a professional meeting minutes generator. Your task is to analyze the provided transcript of a meeting (which may be a chunk of a longer meeting) and extract structured information.
-You MUST return your response as a valid JSON object ONLY. Do not include any conversational filler, intro, outro, markdown block wrappers (such as \`\`\`json), or HTML.
-The JSON structure must match this schema exactly:
+Rules:
+- Respond ONLY with valid JSON. No preamble, no markdown fences.
+- For action item owners: read surrounding context carefully.
+  If ambiguous, write 'PersonA / PersonB'. Never write 'Unassigned'.
+- For deadlines: resolve ALL relative dates to ISO 8601 using the meeting date above.
+  ('next Friday' from a Monday = calculate the actual date).
+  If no deadline exists or cannot be resolved, output null.
+- keyDecisions: only include explicitly agreed decisions, not suggestions.
+- openQuestions: items raised but not resolved in the meeting.
+
+Output schema:
 {
-  "title": "A concise title summarizing the meeting subject",
-  "summary": "A detailed high-level summary paragraph of what was discussed",
-  "attendees": ["Attendee Name 1", "Attendee Name 2"],
-  "keyDecisions": ["Decision 1", "Decision 2"],
-  "actionItems": [
-    {
-      "owner": "Name of the person assigned (or 'Unassigned')",
-      "task": "Description of the task",
-      "deadline": "Deadline timeframe or date (or 'None')"
-    }
-  ],
-  "openQuestions": ["Question 1", "Question 2"]
+  "title": string,
+  "summary": string (2-3 sentences),
+  "attendees": string[],
+  "keyDecisions": string[],
+  "actionItems": [{ "owner": string, "task": string, "deadline": string|null }],
+  "openQuestions": string[]
 }`;
 
 const MERGE_SYSTEM_PROMPT = `You are an expert secretary and editor. You are given a list of JSON meeting summaries extracted from different overlapping chunks of the same long meeting.
@@ -32,19 +31,18 @@ You MUST return your response as a valid JSON object ONLY. Do not include any co
 The final JSON structure must match this schema exactly:
 {
   "title": "A unified, concise title for the entire meeting",
-  "summary": "A consolidated, coherent, high-level summary paragraph of the entire meeting",
+  "summary": "A consolidated, coherent, high-level summary paragraph of the entire meeting (2-3 sentences)",
   "attendees": ["Attendee Name 1", "Attendee Name 2"],
   "keyDecisions": ["Decision 1", "Decision 2"],
   "actionItems": [
     {
-      "owner": "Name of the person assigned (or 'Unassigned')",
+      "owner": "Name of the person assigned or 'PersonA / PersonB'",
       "task": "Description of the task",
-      "deadline": "Deadline timeframe or date (or 'None')"
+      "deadline": "ISO 8601 Date or null"
     }
   ],
   "openQuestions": ["Question 1", "Question 2"]
-}
-Make sure you deduplicate similar decisions, action items, and open questions across the chunks. Compile a union of all attendees. Make sure the overall summary is written as a single, coherent narrative.`;
+}`;
 
 /**
  * Robustly parses a JSON string, handling potential markdown wrappers
@@ -71,31 +69,86 @@ function parseJSONResponse(rawString) {
 }
 
 /**
- * Calls Groq completion endpoint with built-in retry handling for rate limits (429).
- * If a 429 is encountered, it waits 10 seconds and retries up to 3 times.
+ * Computes the Levenshtein distance between two strings.
  */
-async function callGroqWithRetry(params, attempt = 1) {
-  const maxRetries = 3;
-  const delayMs = 10000;
-
-  try {
-    const response = await groq.chat.completions.create(params);
-    return response;
-  } catch (error) {
-    const isRateLimit = error.status === 429 || 
-                        error.statusCode === 429 || 
-                        (error.message && error.message.includes('429')) ||
-                        (error.message && error.message.toLowerCase().includes('rate limit'));
-
-    if (isRateLimit && attempt <= maxRetries) {
-      logger.warn(`Groq rate limit hit (429). Attempt ${attempt}/${maxRetries}. Retrying in ${delayMs / 1000} seconds...`);
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-      return callGroqWithRetry(params, attempt + 1);
-    }
-
-    logger.error(`Groq API call failed on attempt ${attempt}: ${error.message}`);
-    throw error;
+function getLevenshteinDistance(a, b) {
+  const matrix = [];
+  for (let i = 0; i <= b.length; i++) {
+    matrix[i] = [i];
   }
+  for (let j = 0; j <= a.length; j++) {
+    matrix[0][j] = j;
+  }
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1, // substitution
+          Math.min(
+            matrix[i][j - 1] + 1, // insertion
+            matrix[i - 1][j] + 1  // deletion
+          )
+        );
+      }
+    }
+  }
+  return matrix[b.length][a.length];
+}
+
+/**
+ * Returns similarity ratio between 0.0 and 1.0.
+ */
+function getStringSimilarity(a, b) {
+  const cleanA = a.toLowerCase().trim();
+  const cleanB = b.toLowerCase().trim();
+  const distance = getLevenshteinDistance(cleanA, cleanB);
+  const maxLength = Math.max(cleanA.length, cleanB.length);
+  if (maxLength === 0) return 1.0;
+  return 1.0 - (distance / maxLength);
+}
+
+/**
+ * Deduplicates tasks and decisions from the final merged JSON object.
+ */
+function deduplicateResults(mergedJson) {
+  // 1. Deduplicate action items with identical task text (case-insensitive)
+  if (mergedJson.actionItems && Array.isArray(mergedJson.actionItems)) {
+    const uniqueActionItems = [];
+    const seenTasks = new Set();
+    
+    for (const item of mergedJson.actionItems) {
+      if (!item || !item.task) continue;
+      const normalizedTask = item.task.toLowerCase().trim();
+      if (!seenTasks.has(normalizedTask)) {
+        seenTasks.add(normalizedTask);
+        uniqueActionItems.push(item);
+      }
+    }
+    mergedJson.actionItems = uniqueActionItems;
+  }
+
+  // 2. Deduplicate decisions with > 80% string similarity
+  if (mergedJson.keyDecisions && Array.isArray(mergedJson.keyDecisions)) {
+    const uniqueDecisions = [];
+    
+    for (const decision of mergedJson.keyDecisions) {
+      let isDuplicate = false;
+      for (const existing of uniqueDecisions) {
+        if (getStringSimilarity(decision, existing) > 0.8) {
+          isDuplicate = true;
+          break;
+        }
+      }
+      if (!isDuplicate) {
+        uniqueDecisions.push(decision);
+      }
+    }
+    mergedJson.keyDecisions = uniqueDecisions;
+  }
+  
+  return mergedJson;
 }
 
 /**
@@ -134,10 +187,11 @@ function chunkTranscript(text) {
  * from a transcript. Handles large files by chunking and merging.
  * 
  * @param {string} transcript - The raw text transcript
- * @param {Array<{speaker: string, text: string, start: number, end: number}>} speakers - Speaker turns
+ * @param {Array<{speaker: string, text: string}>} speakers - Speaker turns
+ * @param {string} meetingDate - Meeting ISO date for relative date resolution
  * @returns {Promise<object>} - Unified JSON metadata
  */
-async function extract(transcript, speakers) {
+async function extract(transcript, speakers, meetingDate) {
   if (!config.GROQ_API_KEY || config.GROQ_API_KEY.includes('your_groq_api_key')) {
     const err = new Error('Groq API Key is not configured. Please set the GROQ_API_KEY in your .env file.');
     logger.error(err.message);
@@ -157,6 +211,8 @@ async function extract(transcript, speakers) {
 
   // 3. Process each chunk
   const chunkSummaries = [];
+  const resolvedSystemPrompt = EXTRACTION_SYSTEM_PROMPT.replace('{{MEETING_DATE}}', meetingDate || new Date().toISOString().split('T')[0]);
+
   for (let index = 0; index < chunks.length; index++) {
     const chunkText = chunks[index];
     logger.info(`Analyzing transcript chunk ${index + 1}/${chunks.length}...`);
@@ -164,7 +220,7 @@ async function extract(transcript, speakers) {
     const payload = {
       model: 'llama-3.3-70b-versatile',
       messages: [
-        { role: 'system', content: EXTRACTION_SYSTEM_PROMPT },
+        { role: 'system', content: resolvedSystemPrompt },
         { role: 'user', content: `Here is the meeting transcript content to analyze:\n\n${chunkText}` }
       ],
       response_format: { type: 'json_object' }
@@ -177,24 +233,29 @@ async function extract(transcript, speakers) {
   }
 
   // 4. Merge results if there was more than one chunk
+  let finalResult;
   if (chunkSummaries.length === 1) {
     logger.info('Single chunk processing completed successfully.');
-    return chunkSummaries[0];
+    finalResult = chunkSummaries[0];
+  } else {
+    logger.info(`Merging ${chunkSummaries.length} chunk summaries into a single deduplicated result...`);
+    const mergePayload = {
+      model: 'llama-3.3-70b-versatile',
+      messages: [
+        { role: 'system', content: MERGE_SYSTEM_PROMPT },
+        { role: 'user', content: `Here is the list of JSON summaries to merge and consolidate:\n\n${JSON.stringify(chunkSummaries, null, 2)}` }
+      ],
+      response_format: { type: 'json_object' }
+    };
+
+    const mergeCompletion = await callGroqWithRetry(mergePayload);
+    const finalContent = mergeCompletion.choices[0].message.content;
+    finalResult = parseJSONResponse(finalContent);
   }
 
-  logger.info(`Merging ${chunkSummaries.length} chunk summaries into a single deduplicated result...`);
-  const mergePayload = {
-    model: 'llama-3.3-70b-versatile',
-    messages: [
-      { role: 'system', content: MERGE_SYSTEM_PROMPT },
-      { role: 'user', content: `Here is the list of JSON summaries to merge and consolidate:\n\n${JSON.stringify(chunkSummaries, null, 2)}` }
-    ],
-    response_format: { type: 'json_object' }
-  };
-
-  const mergeCompletion = await callGroqWithRetry(mergePayload);
-  const finalContent = mergeCompletion.choices[0].message.content;
-  return parseJSONResponse(finalContent);
+  // 5. Run string similarity deduplication pass on final result
+  logger.info('Executing post-processing deduplication pass...');
+  return deduplicateResults(finalResult);
 }
 
 module.exports = {

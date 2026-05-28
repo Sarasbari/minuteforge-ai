@@ -1,86 +1,45 @@
 const logger = require('../utils/logger');
-const ffmpegService = require('../services/ffmpeg.service');
-const transcriptionService = require('../services/transcription.service');
-const extractionService = require('../services/extraction.service');
-const notionService = require('../services/notion.service');
-const cleanup = require('../utils/cleanup');
+const { transcriptionQueue } = require('../queues/transcription.queue');
 
 /**
  * Controller to handle POST /upload requests
  */
 const handleUpload = async (req, res, next) => {
-  let originalFilePath = null;
-  let audioFilePath = null;
-
   try {
-    // If multer file filter didn't fail but no file was uploaded (e.g. wrong form field name)
+    // If multer file filter didn't fail but no file was uploaded
     if (!req.file) {
       const error = new Error('No file uploaded. Make sure the multipart field name is "file".');
       error.status = 400;
       return next(error);
     }
 
-    originalFilePath = req.file.path;
-    audioFilePath = originalFilePath;
+    const filePath = req.file.path;
+    const originalName = req.file.originalname;
+    const mimetype = req.file.mimetype;
 
     // Log the file details
-    logger.info(`Upload successful: filename="${req.file.filename}", mimetype="${req.file.mimetype}", size=${req.file.size} bytes`);
+    logger.info(`Upload successful: filename="${req.file.filename}", mimetype="${mimetype}", size=${req.file.size} bytes`);
 
-    // 1. Run FFmpeg extraction if file is MP4
-    try {
-      audioFilePath = await ffmpegService.extractAudio(originalFilePath);
-    } catch (error) {
-      throw new Error(`[Audio Extraction Failed]: ${error.message}`);
-    }
+    // Add job to BullMQ queue
+    const job = await transcriptionQueue.add('transcribe-job', {
+      filePath,
+      originalName,
+      mimetype,
+      uploadedAt: new Date().toISOString()
+    });
 
-    // 2. Call AssemblyAI transcription service
-    let transcriptionResult;
-    try {
-      transcriptionResult = await transcriptionService.transcribe(audioFilePath);
-    } catch (error) {
-      throw new Error(`[Transcription Failed]: ${error.message}`);
-    }
+    logger.info(`Enqueued transcription job "${job.id}" for file: "${originalName}"`);
 
-    // 3. Run Groq summary and action items extraction
-    let extractionResult;
-    try {
-      extractionResult = await extractionService.extract(transcriptionResult.transcript, transcriptionResult.speakers);
-    } catch (error) {
-      throw new Error(`[Summary Extraction Failed]: ${error.message}`);
-    }
-
-    // 4. Create Notion meeting page
-    let notionResult;
-    try {
-      notionResult = await notionService.createMeetingPage({
-        extraction: extractionResult,
-        transcript: transcriptionResult.transcript,
-        speakers: transcriptionResult.speakers
-      });
-    } catch (error) {
-      throw new Error(`[Notion Publish Failed]: ${error.message}`);
-    }
-
-    // Return success response with the Notion page URL
-    res.status(200).json({
-      success: true,
-      notionUrl: notionResult.url
+    // Immediately return HTTP 202 with jobId
+    return res.status(202).json({
+      jobId: job.id,
+      status: 'queued'
     });
   } catch (error) {
-    logger.error(`Upload controller failed: ${error.message}`);
-    // If error doesn't have a specific step label, add a generic controller label
-    const mappedMessage = error.message.startsWith('[') ? error.message : `[Upload Controller Failed]: ${error.message}`;
-    const mappedError = new Error(mappedMessage);
+    logger.error(`Upload controller failed to enqueue job: ${error.message}`);
+    const mappedError = new Error(`[Queue Enqueue Failed]: ${error.message}`);
     mappedError.status = error.status || 500;
     next(mappedError);
-  } finally {
-    // Asynchronously delete temporary files to avoid disk leaks
-    if (originalFilePath) {
-      cleanup.deleteFile(originalFilePath);
-    }
-    if (audioFilePath && audioFilePath !== originalFilePath) {
-      cleanup.deleteFile(audioFilePath);
-    }
   }
 };
 
